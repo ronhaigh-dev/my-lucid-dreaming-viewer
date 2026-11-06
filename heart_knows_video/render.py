@@ -5,7 +5,7 @@ seven different jackets. The fern on the balcony withers across the song.
 At the end a mirror hangs on the hook and his reflection has no face.
 
 Usage:
-    python3 render.py COVER.jpg AUDIO.wav OUT.mp4 [--preview SECONDS ...]
+    python3 render.py COVER.jpg AUDIO.wav OUT.mp4 [--endcard CARD.png] [--preview SECONDS ...]
 """
 import math
 import os
@@ -20,6 +20,7 @@ W, H = 1408, 768
 SS = 2                      # supersampling factor
 FPS = 24
 DURATION = 157.57
+ENDCARD_SECONDS = 5.5          # landing page after the song: total about 2:43
 
 INK = (22, 24, 12)
 LW = 2.6                    # line width at 1x
@@ -163,8 +164,18 @@ BROWN_D = (78, 58, 30)
 
 
 def health(t):
-    """1 = lush, 0 = dead. Slow at first, fully dead a little before the end."""
-    return 1.0 - smooth((t - 6.0) / 140.0) ** 0.85
+    """1 = lush, 0 = dead. Healthy through the bloom, then withers to the end."""
+    return 1.0 - smooth((t - 70.0) / 78.0) ** 0.85
+
+
+def growth(t):
+    return 0.82 + 0.18 * smooth(t / 45.0)
+
+
+PINK = (222, 118, 168)
+PINK_D = (176, 78, 128)
+FADED = (176, 128, 128)
+CENTER = (232, 192, 84)
 
 
 class Plant:
@@ -189,6 +200,14 @@ class Plant:
             self.fronds.append(dict(a=a, L=L, leaflets=leaflets,
                                     collapse=rng.uniform(0.03, 0.2),
                                     sway=rng.uniform(0, 6.28)))
+        self.flowers = []
+        for i in range(9):
+            a = math.radians(lerp(-140, -40, i / 8) + rng.uniform(-8, 8))
+            self.flowers.append(dict(
+                a=a, L=rng.uniform(105, 160), open=rng.uniform(14, 40),
+                wilt=rng.uniform(88, 104), sway=rng.uniform(0, 6.28),
+                petals=[dict(td=rng.uniform(100, 128), land=(rng.uniform(400, 620), rng.uniform(544, 604)),
+                             spin=rng.uniform(-3, 3), drift=rng.uniform(-25, 25)) for _ in range(8)]))
         # time at which each leaflet drops
         samples = [(i / 10.0, health(i / 10.0)) for i in range(int(DURATION * 10) + 1)]
         for f in self.fronds:
@@ -197,7 +216,7 @@ class Plant:
 
     def frond_point(self, f, h, s, t):
         a = f["a"] + 0.015 * math.sin(t * 0.7 + f["sway"]) * h
-        L = f["L"] * (0.92 + 0.08 * h)
+        L = f["L"] * (0.92 + 0.08 * h) * growth(t)
         dx, dy = math.cos(a), math.sin(a)
         droop = (1 - h) * 1.25
         if h < f["collapse"]:
@@ -253,7 +272,59 @@ class Plant:
                     else:
                         floor_leaves.append((self.leaf_poly(lx, ly, lf["spin"] * 0.3, ln * 0.95, wd * 0.6),
                                              lerpc(col, BROWN, 0.5)))
+        # flowers ride above the foliage
+        for fl in self.flowers:
+            self.draw_flower(d, fl, t, h, floor_leaves, falling)
         return floor_leaves, falling
+
+    def flower_point(self, fl, s, t):
+        h = health(t)
+        a = fl["a"] + 0.02 * math.sin(t * 0.8 + fl["sway"])
+        L = fl["L"] * growth(t)
+        wilt = smooth((t - fl["wilt"]) / 30.0)
+        dx, dy = math.cos(a), math.sin(a)
+        out = 1 if dx >= 0 else -1
+        droop = wilt * 1.5 + (1 - h) * 0.5
+        return (PLANT_CX + dx * L * s + out * droop * 0.3 * L * s * s,
+                PLANT_CY + dy * L * s + droop * L * s * s)
+
+    def petal_poly(self, cx, cy, ang, r, w):
+        c, s = math.cos(ang), math.sin(ang)
+        loc = [(0, 0), (r * 0.5, -w), (r, -w * 0.6), (r * 1.08, 0), (r, w * 0.6), (r * 0.5, w)]
+        return [(cx + x * c - y * s, cy + x * s + y * c) for x, y in loc]
+
+    def draw_flower(self, d, fl, t, h, floor_leaves, falling):
+        stem = lerpc(GREEN_D, BROWN_D, clamp01((t - fl["wilt"]) / 35.0))
+        path = [self.flower_point(fl, i / 10, t) for i in range(11)]
+        line(d, path, fill=stem, width=2.0)
+        x, y = path[-1]
+        bloom = smooth((t - fl["open"]) / 16.0)
+        wilt = smooth((t - fl["wilt"]) / 30.0)
+        col = lerpc(lerpc(PINK, FADED, wilt * 1.4), BROWN, max(0.0, wilt - 0.55) * 2)
+        if bloom < 0.25:                       # still a bud
+            r = 5 + bloom * 16
+            ellipse(d, x, y, r * 0.75, r, lerpc(GREEN_L, PINK, bloom * 3), outline=stem, width=1.4)
+            return
+        r = 6 + 13 * bloom
+        # petals droop toward the ground as the flower wilts
+        for k, pt in enumerate(fl["petals"]):
+            ang = k * math.pi / 4 + fl["sway"]
+            ang = lerp(ang, math.pi / 2 + (ang % (2 * math.pi) - math.pi) * 0.35, wilt)
+            if t < pt["td"]:
+                poly(d, self.petal_poly(x, y, ang, r, r * 0.42), col, outline=PINK_D if wilt < 0.5 else BROWN_D, width=1.2)
+            else:
+                dt = t - pt["td"]
+                lx, ly = pt["land"]
+                pc = lerpc(col, FADED, 0.4)
+                if dt < 1.8:
+                    k2 = dt / 1.8
+                    px = lerp(x, lx, k2) + math.sin(k2 * 6) * pt["drift"] * (1 - k2)
+                    py = lerp(y, ly, k2 * k2)
+                    falling.append((self.petal_poly(px, py, ang + pt["spin"] * k2, r * 0.9, r * 0.38), pc))
+                else:
+                    floor_leaves.append((self.petal_poly(lx, ly, pt["spin"], r * 0.85, r * 0.3), pc))
+        cc = lerpc(CENTER, BROWN_D, wilt)
+        ellipse(d, x, y, 4 + 2 * bloom, 4 + 2 * bloom, cc, width=1.4)
 
     def draw_all(self, d, t):
         # leaves on the floor sit behind the pot
@@ -348,19 +419,25 @@ def draw_jacket(d, j, ox, oy, shadow=True, scale=1.0):
 
 
 # ---------------------------------------------------------------- the man
+# Styled after the reference clip: athletic build, swept-up dark hair with
+# short sides, white crew-neck tee, black trousers, and a beard shadow.
 
-SKIN = (202, 162, 126)
-SKIN_D = (170, 132, 100)
-HAIR = (58, 46, 34)
-SHIRT = (206, 203, 188)
-SHIRT_D = (176, 173, 160)
-PANTS = (70, 78, 84)
-PANTS_D = (54, 60, 66)
+SKIN = (224, 178, 142)
+SKIN_D = (192, 148, 114)
+STUBBLE = (198, 158, 130)        # beard shadow tone over the skin
+HAIR = (62, 48, 38)
+HAIR_HI = (96, 76, 60)
+HAIR_FADE = (128, 104, 86)
+SHIRT = (236, 234, 226)
+SHIRT_D = (204, 202, 194)
+PANTS = (40, 42, 46)
+PANTS_D = (30, 32, 35)
+BELT = (24, 24, 26)
 
 HEAD_Y = 160
-SHOULDER_Y = 238
-HIP_Y = 480
-FOOT_Y = 880
+SHOULDER_Y = 240
+HIP_Y = 486
+FOOT_Y = 890
 
 
 def limb(cx, cy, ang, length, w0, w1):
@@ -369,24 +446,72 @@ def limb(cx, cy, ang, length, w0, w1):
     return [rot(cx + x, cy + y, ang, cx, cy) for x, y in loc], rot(cx, cy + length, ang, cx, cy)
 
 
-def draw_arm(d, sx, sy, ang, jacket, near=True, length=240):
+def draw_arm(d, sx, sy, ang, jacket, near=True, length=236, bend=0.14):
+    """Two-segment arm. bend turns the forearm forward (sign follows ang direction set by caller)."""
     sleeve_c = jacket["c"] if jacket else SHIRT
-    if not near:
-        sleeve_c = darker(sleeve_c, 0.82)
     skin = SKIN if near else SKIN_D
-    full, hand = limb(sx, sy, ang, length, 34, 26)
-    poly(d, full, skin)
-    sleeve_len = length - 22 if jacket else 78
-    sl, _ = limb(sx, sy, ang, sleeve_len, 40, 32 if jacket else 36)
-    poly(d, sl, sleeve_c)
-    ellipse(d, hand[0], hand[1], 15, 17, skin)
-    return hand
+    if not near:
+        sleeve_c = darker(sleeve_c, 0.84)
+    up = length * 0.51
+    lo = length - up
+    upper, elbow = limb(sx, sy, ang, up, 44, 36)
+    lower, wrist = limb(elbow[0], elbow[1], ang + bend, lo, 34, 26)
+    poly(d, upper, skin)
+    ellipse(d, elbow[0], elbow[1], 17, 17, skin, outline=None)
+    poly(d, lower, skin)
+    if jacket:
+        poly(d, limb(sx, sy, ang, up, 50, 44)[0], sleeve_c)
+        ellipse(d, elbow[0], elbow[1], 21, 21, sleeve_c, outline=None)
+        poly(d, limb(elbow[0], elbow[1], ang + bend, lo - 12, 42, 36)[0], sleeve_c)
+    else:
+        ellipse(d, sx, sy + 6, 25, 22, sleeve_c, outline=None)
+        sl, cuff = limb(sx, sy - 4, ang, 76, 50, 48)
+        poly(d, sl, sleeve_c)
+        line(d, [rot(sx - 23, sy + 64, ang, sx, sy), rot(sx + 23, sy + 64, ang, sx, sy)],
+             fill=SHIRT_D, width=1.6)
+    # hand with a thumb
+    hx, hy = rot(wrist[0], wrist[1] + 10, ang + bend, wrist[0], wrist[1])
+    ellipse(d, hx, hy, 14, 19, skin)
+    return (hx, hy)
 
 
 def draw_leg(d, hx, hy, ang, near=True):
     c = PANTS if near else PANTS_D
-    p, _ = limb(hx, hy, ang, FOOT_Y - HIP_Y, 54, 42)
+    p, _ = limb(hx, hy, ang, FOOT_Y - HIP_Y, 58, 44)
     poly(d, p, c)
+
+
+def draw_profile_head(d, X, y):
+    """Head in profile. X(dx) maps 'forward' offsets to screen x."""
+    def P(seq):
+        return [(X(a), b + y) for a, b in seq]
+    # neck
+    poly(d, P([(-20, 196), (18, 204), (22, 246), (-24, 246)]), SKIN)
+    line(d, P([(16, 214), (20, 236)]), fill=SKIN_D, width=1.6)
+    head = [(30, 118), (38, 132), (42, 148), (41, 157), (56, 178), (44, 186), (45, 195), (42, 207),
+            (32, 217), (14, 219), (-6, 208), (-18, 196), (-34, 186), (-42, 165), (-42, 140),
+            (-32, 118), (-12, 106), (10, 106)]
+    poly(d, P(head), SKIN)
+    # beard shadow: jaw, chin and upper lip, no outline
+    poly(d, P([(43, 187), (44.5, 195), (41.5, 207), (32, 216), (14, 218), (-5, 207), (-15, 195),
+               (-6, 190), (8, 197), (24, 196), (34, 186)]), STUBBLE, outline=None)
+    poly(d, P(head), None)
+    line(d, P([(2, 192), (-4, 200)]), fill=SKIN_D, width=1.4)     # jaw hint
+    # ear
+    ellipse(d, X(-14), 166 + y, 8, 13, SKIN_D, width=2)
+    line(d, P([(-14, 160), (-17, 168), (-13, 174)]), fill=darker(SKIN_D, 0.8), width=1.4)
+    # hair: swept-up top, short faded sides
+    poly(d, P([(-24, 146), (-32, 162), (-36, 184), (-26, 190), (-22, 168)]), HAIR_FADE, outline=None)
+    hair = [(40, 130), (52, 114), (48, 96), (30, 84), (6, 82), (-20, 88), (-38, 104), (-46, 134),
+            (-42, 160), (-34, 150), (-24, 146), (-10, 138), (8, 132), (28, 130)]
+    poly(d, P(hair), HAIR)
+    for a in ((44, 104, 10, 90), (30, 106, -6, 94), (16, 116, -18, 104)):
+        line(d, P([(a[0], a[1]), (a[2], a[3])]), fill=HAIR_HI, width=1.8)
+    # brow and eye
+    line(d, P([(22, 146), (40, 145)]), fill=HAIR, width=3.6)
+    line(d, P([(27, 157), (36, 156)]), width=2.4)
+    ellipse(d, X(32), 158 + y, 2.4, 2.4, INK, outline=None)
+    line(d, P([(28, 152), (36, 151)]), fill=SKIN_D, width=1.2)     # eyelid crease
 
 
 def draw_side(d, cx, bob, phase, facing, jacket, walking=True):
@@ -399,89 +524,92 @@ def draw_side(d, cx, bob, phase, facing, jacket, walking=True):
         return cx + f * dx
 
     # far limbs
-    draw_arm(d, X(-4), SHOULDER_Y + 14 + y, -f * swing * 0.9, jacket, near=False)
+    draw_arm(d, X(-4), SHOULDER_Y + 16 + y, -f * swing * 0.9, jacket, near=False, bend=-f * 0.16)
     draw_leg(d, X(0), HIP_Y + y, f * swing, near=False)
     draw_leg(d, X(0), HIP_Y + y, -f * swing, near=True)
+    # belt
+    poly(d, [(X(-38), HIP_Y - 8 + y), (X(38), HIP_Y - 8 + y), (X(38), HIP_Y + 8 + y), (X(-38), HIP_Y + 8 + y)], BELT)
     # torso
     if jacket:
         Lj = min(jacket["L"] * 0.62, 300)
-        tor = [(X(-34), SHOULDER_Y + y), (X(36), SHOULDER_Y + 4 + y), (X(46), SHOULDER_Y + 120 + y),
-               (X(46), SHOULDER_Y + Lj + y), (X(-44), SHOULDER_Y + Lj + y), (X(-46), SHOULDER_Y + 40 + y)]
+        tor = [(X(-38), SHOULDER_Y + y), (X(34), SHOULDER_Y + 4 + y), (X(50), SHOULDER_Y + 50 + y),
+               (X(50), SHOULDER_Y + Lj + y), (X(-46), SHOULDER_Y + Lj + y), (X(-50), SHOULDER_Y + 40 + y)]
         poly(d, tor, jacket["c"])
         lc = jacket.get("satin", jacket["c"])
-        poly(d, [(X(28), SHOULDER_Y + 2 + y), (X(46), SHOULDER_Y + 100 + y), (X(30), SHOULDER_Y + 60 + y)],
+        poly(d, [(X(26), SHOULDER_Y + 2 + y), (X(50), SHOULDER_Y + 104 + y), (X(32), SHOULDER_Y + 62 + y)],
              darker(lc, 0.85))
-        poly(d, [(X(-34), SHOULDER_Y + y), (X(-22), SHOULDER_Y - 12 + y), (X(0), SHOULDER_Y - 6 + y),
+        poly(d, [(X(14), SHOULDER_Y + 2 + y), (X(26), SHOULDER_Y + 2 + y), (X(30), SHOULDER_Y + 40 + y)], SHIRT)
+        poly(d, [(X(-38), SHOULDER_Y + y), (X(-24), SHOULDER_Y - 14 + y), (X(0), SHOULDER_Y - 8 + y),
                  (X(-6), SHOULDER_Y + 18 + y)], darker(jacket["c"], 0.7))
         if jacket.get("belt"):
-            poly(d, [(X(-46), SHOULDER_Y + 160 + y), (X(46), SHOULDER_Y + 160 + y),
-                     (X(46), SHOULDER_Y + 178 + y), (X(-46), SHOULDER_Y + 178 + y)], darker(jacket["c"], 0.85))
+            poly(d, [(X(-48), SHOULDER_Y + 160 + y), (X(50), SHOULDER_Y + 160 + y),
+                     (X(50), SHOULDER_Y + 178 + y), (X(-48), SHOULDER_Y + 178 + y)], darker(jacket["c"], 0.85))
     else:
-        tor = [(X(-32), SHOULDER_Y + y), (X(34), SHOULDER_Y + 4 + y), (X(42), SHOULDER_Y + 110 + y),
-               (X(38), HIP_Y + 4 + y), (X(-38), HIP_Y + 4 + y), (X(-42), SHOULDER_Y + 50 + y)]
+        tor = [(X(-40), SHOULDER_Y - 2 + y), (X(28), SHOULDER_Y + 4 + y), (X(50), SHOULDER_Y + 42 + y),
+               (X(52), SHOULDER_Y + 96 + y), (X(40), SHOULDER_Y + 180 + y), (X(38), HIP_Y - 8 + y),
+               (X(-36), HIP_Y - 8 + y), (X(-40), SHOULDER_Y + 150 + y), (X(-48), SHOULDER_Y + 50 + y)]
         poly(d, tor, SHIRT)
-        line(d, [(X(-6), HIP_Y - 30 + y), (X(30), HIP_Y - 26 + y)], fill=SHIRT_D, width=2)
-    # neck and head
-    poly(d, [(X(-14), 196 + y), (X(16), 196 + y), (X(18), SHOULDER_Y + 6 + y), (X(-16), SHOULDER_Y + 6 + y)], SKIN)
-    hx, hy = X(4), HEAD_Y + y
-    # nose and face contour, then head
-    poly(d, [(X(34), 150 + y), (X(52), 176 + y), (X(36), 182 + y), (X(36), 196 + y), (X(14), 206 + y)], SKIN)
-    ellipse(d, hx, hy, 40, 48, SKIN)
-    poly(d, [(X(34), 151 + y), (X(51), 176 + y), (X(36), 181 + y)], SKIN, outline=None)
-    line(d, [(X(36), 150 + y), (X(52), 176 + y), (X(37), 182 + y)], width=2.2)
-    # hair covers top and back
-    hair = [(X(36), 132 + y), (X(26), 114 + y), (X(4), 109 + y), (X(-22), 114 + y), (X(-40), 136 + y),
-            (X(-44), 170 + y), (X(-36), 196 + y), (X(-18), 192 + y), (X(-14), 160 + y), (X(4), 140 + y), (X(30), 142 + y)]
-    poly(d, hair, HAIR)
-    ellipse(d, X(-6), 168 + y, 8, 12, SKIN_D, width=2)
-    line(d, [(X(26), 146 + y), (X(38), 147 + y)], width=2.4)          # brow
-    ellipse(d, X(31), 157 + y, 2.6, 2.6, INK, outline=None)            # eye
+        poly(d, [(X(-46), SHOULDER_Y + 40 + y), (X(-30), SHOULDER_Y + 30 + y), (X(-26), HIP_Y - 8 + y),
+                 (X(-36), HIP_Y - 8 + y), (X(-40), SHOULDER_Y + 120 + y)], SHIRT_D, outline=None)
+        line(d, [(X(42), SHOULDER_Y + 96 + y), (X(20), SHOULDER_Y + 110 + y)], fill=SHIRT_D, width=1.6)
+        poly(d, tor, None)
+    draw_profile_head(d, X, y)
+    if not jacket:
+        line(d, [(X(-20), SHOULDER_Y - 2 + y), (X(4), SHOULDER_Y + 8 + y), (X(24), SHOULDER_Y + 4 + y)], width=2.2)
     # near arm on top
-    draw_arm(d, X(-2), SHOULDER_Y + 14 + y, f * swing * 0.9, jacket, near=True)
+    draw_arm(d, X(-2), SHOULDER_Y + 16 + y, f * swing * 0.9, jacket, near=True, bend=-f * 0.16)
 
 
 def draw_back(d, cx, jacket, reach=0.0, target=(HANG_X, HANG_Y - 10), y=0.0):
     """Back view, facing the wall. reach 0..1 raises the left arm toward target."""
-    draw_leg(d, cx - 26, HIP_Y + y, 0.03)
-    draw_leg(d, cx + 26, HIP_Y + y, -0.03)
+    draw_leg(d, cx - 28, HIP_Y + y, 0.03)
+    draw_leg(d, cx + 28, HIP_Y + y, -0.03)
+    poly(d, [(cx - 54, HIP_Y - 8 + y), (cx + 54, HIP_Y - 8 + y), (cx + 54, HIP_Y + 8 + y), (cx - 54, HIP_Y + 8 + y)], BELT)
     # right arm (at his side)
-    draw_arm(d, cx + 58, SHOULDER_Y + 14 + y, -0.06, jacket)
-    # torso
+    draw_arm(d, cx + 64, SHOULDER_Y + 16 + y, -0.08, jacket, bend=0.06)
+    # torso: broad shoulders tapering to the waist
     if jacket:
         Lj = min(jacket["L"] * 0.62, 300)
-        tor = [(cx - 60, SHOULDER_Y + y), (cx + 60, SHOULDER_Y + y), (cx + 66, SHOULDER_Y + Lj + y),
+        tor = [(cx - 68, SHOULDER_Y + y), (cx + 68, SHOULDER_Y + y), (cx + 66, SHOULDER_Y + Lj + y),
                (cx - 66, SHOULDER_Y + Lj + y)]
         poly(d, tor, jacket["c"])
-        poly(d, [(cx, SHOULDER_Y + 40 + y), (cx + 60, SHOULDER_Y + y), (cx + 66, SHOULDER_Y + Lj + y),
+        poly(d, [(cx, SHOULDER_Y + 40 + y), (cx + 68, SHOULDER_Y + y), (cx + 66, SHOULDER_Y + Lj + y),
                  (cx + 4, SHOULDER_Y + Lj + y)], darker(jacket["c"], 0.88), outline=None)
         poly(d, tor, None)
         line(d, [(cx, SHOULDER_Y + Lj * 0.55 + y), (cx, SHOULDER_Y + Lj + y)])
-        poly(d, [(cx - 34, SHOULDER_Y - 8 + y), (cx + 34, SHOULDER_Y - 8 + y), (cx + 40, SHOULDER_Y + 10 + y),
-                 (cx - 40, SHOULDER_Y + 10 + y)], darker(jacket["c"], 0.75))
+        poly(d, [(cx - 36, SHOULDER_Y - 10 + y), (cx + 36, SHOULDER_Y - 10 + y), (cx + 42, SHOULDER_Y + 10 + y),
+                 (cx - 42, SHOULDER_Y + 10 + y)], darker(jacket["c"], 0.75))
         if jacket.get("belt"):
-            poly(d, [(cx - 64, SHOULDER_Y + 160 + y), (cx + 64, SHOULDER_Y + 160 + y),
-                     (cx + 64, SHOULDER_Y + 178 + y), (cx - 64, SHOULDER_Y + 178 + y)], darker(jacket["c"], 0.85))
+            poly(d, [(cx - 66, SHOULDER_Y + 160 + y), (cx + 66, SHOULDER_Y + 160 + y),
+                     (cx + 66, SHOULDER_Y + 178 + y), (cx - 66, SHOULDER_Y + 178 + y)], darker(jacket["c"], 0.85))
     else:
-        tor = [(cx - 56, SHOULDER_Y + y), (cx + 56, SHOULDER_Y + y), (cx + 50, HIP_Y + 4 + y),
-               (cx - 50, HIP_Y + 4 + y)]
+        tor = [(cx - 66, SHOULDER_Y + 4 + y), (cx - 30, SHOULDER_Y - 6 + y), (cx + 30, SHOULDER_Y - 6 + y),
+               (cx + 66, SHOULDER_Y + 4 + y), (cx + 60, SHOULDER_Y + 110 + y), (cx + 48, HIP_Y - 8 + y),
+               (cx - 48, HIP_Y - 8 + y), (cx - 60, SHOULDER_Y + 110 + y)]
         poly(d, tor, SHIRT)
-        poly(d, [(cx + 8, SHOULDER_Y + 30 + y), (cx + 56, SHOULDER_Y + y), (cx + 50, HIP_Y + 4 + y),
-                 (cx + 12, HIP_Y + 4 + y)], SHIRT_D, outline=None)
+        poly(d, [(cx + 10, SHOULDER_Y + 30 + y), (cx + 66, SHOULDER_Y + 4 + y), (cx + 60, SHOULDER_Y + 110 + y),
+                 (cx + 48, HIP_Y - 8 + y), (cx + 14, HIP_Y - 8 + y)], SHIRT_D, outline=None)
+        line(d, [(cx - 30, SHOULDER_Y + 70 + y), (cx - 8, SHOULDER_Y + 90 + y)], fill=SHIRT_D, width=1.6)
         poly(d, tor, None)
-    # neck, ears, head (all hair from behind)
-    poly(d, [(cx - 16, 196 + y), (cx + 16, 196 + y), (cx + 18, SHOULDER_Y + 2 + y), (cx - 18, SHOULDER_Y + 2 + y)], SKIN)
-    ellipse(d, cx - 40, 166 + y, 8, 13, SKIN_D, width=2)
-    ellipse(d, cx + 40, 166 + y, 8, 13, SKIN_D, width=2)
-    ellipse(d, cx, HEAD_Y + y, 40, 48, HAIR)
-    line(d, [(cx - 22, 200 + y), (cx, 205 + y), (cx + 22, 200 + y)], fill=darker(HAIR, 0.6), width=1.6)
-    # left arm: hangs, or reaches up toward the hanger
-    sx, sy = cx - 58, SHOULDER_Y + 14 + y
+    # neck, ears, head (hair from behind, faded at the nape)
+    poly(d, [(cx - 20, 196 + y), (cx + 20, 196 + y), (cx + 24, SHOULDER_Y + y), (cx - 24, SHOULDER_Y + y)], SKIN)
+    ellipse(d, cx - 41, 166 + y, 8, 13, SKIN_D, width=2)
+    ellipse(d, cx + 41, 166 + y, 8, 13, SKIN_D, width=2)
+    ellipse(d, cx, HEAD_Y + y, 41, 50, HAIR_FADE)
+    poly(d, [(cx - 41, 172 + y), (cx - 44, 140 + y), (cx - 34, 108 + y), (cx - 12, 96 + y), (cx + 14, 96 + y),
+             (cx + 36, 108 + y), (cx + 44, 140 + y), (cx + 41, 172 + y), (cx + 24, 180 + y), (cx, 184 + y),
+             (cx - 24, 180 + y)], HAIR)
+    for k in (-18, 0, 18):
+        line(d, [(cx + k * 1.2, 104 + y), (cx + k, 150 + y)], fill=HAIR_HI, width=1.6)
+    # left arm: hangs, or reaches up toward the hanger (straightens as it reaches)
+    sx, sy = cx - 64, SHOULDER_Y + 16 + y
     tx, ty = target
     reach_ang = math.atan2(-(tx - sx), (ty - sy))     # angle from straight down
-    ang = lerp(0.06, reach_ang, smooth(reach))
+    k = smooth(reach)
+    ang = lerp(0.08, reach_ang, k)
     dist = math.hypot(tx - sx, ty - sy)
-    length = lerp(240, min(250, dist), smooth(reach))
-    return draw_arm(d, sx, sy, ang, jacket, length=length)
+    length = lerp(236, min(250, dist), k)
+    return draw_arm(d, sx, sy, ang, jacket, length=length, bend=lerp(-0.06, 0.0, k))
 
 
 # ---------------------------------------------------------------- mirror
@@ -528,12 +656,15 @@ def faceless_reflection(presence, jacket):
         poly(ld, [(cx - 28, top + 128), (cx + 28, top + 128), (cx, top + 200)], SHIRT)
         poly(ld, [(cx - 40, top + 128), (cx - 4, top + 205), (cx - 30, top + 175), (cx - 50, top + 150)], darker(c, 0.85))
         poly(ld, [(cx + 40, top + 128), (cx + 4, top + 205), (cx + 30, top + 175), (cx + 50, top + 150)], darker(c, 0.85))
-        poly(ld, [(cx - 14, top + 92), (cx + 14, top + 92), (cx + 16, top + 134), (cx - 16, top + 134)], SKIN)
+        poly(ld, [(cx - 18, top + 92), (cx + 18, top + 92), (cx + 21, top + 134), (cx - 21, top + 134)], SKIN)
         ellipse(ld, cx - 37, top + 52, 7, 12, SKIN_D, width=2)
         ellipse(ld, cx + 37, top + 52, 7, 12, SKIN_D, width=2)
-        ellipse(ld, cx, top + 48, 36, 46, SKIN)                     # no eyes, no nose, no mouth
-        poly(ld, [(cx - 37, top + 44), (cx - 32, top + 14), (cx - 10, top), (cx + 16, top + 1), (cx + 34, top + 16),
-                  (cx + 38, top + 44), (cx + 30, top + 26), (cx + 4, top + 18), (cx - 26, top + 24)], HAIR)
+        ellipse(ld, cx, top + 50, 36, 47, SKIN)                     # no eyes, no nose, no mouth
+        poly(ld, [(cx - 37, top + 50), (cx - 36, top + 22), (cx - 28, top + 26), (cx - 30, top + 50)], HAIR_FADE, outline=None)
+        poly(ld, [(cx + 37, top + 50), (cx + 36, top + 22), (cx + 28, top + 26), (cx + 30, top + 50)], HAIR_FADE, outline=None)
+        poly(ld, [(cx - 34, top + 30), (cx - 34, top + 4), (cx - 16, top - 12), (cx + 10, top - 14), (cx + 30, top - 4),
+                  (cx + 36, top + 30), (cx + 26, top + 16), (cx + 4, top + 12), (cx - 22, top + 16)], HAIR)
+        line(ld, [(cx - 14, top - 6), (cx + 12, top - 8)], fill=HAIR_HI, width=1.8)
     return fn
 
 
@@ -737,9 +868,29 @@ def main():
     with open(lst, "w") as fh:
         for pth in parts:
             fh.write(f"file '{pth}'\n")
+    song = os.path.join(work, "song.mp4")
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst,
                     "-i", audio, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
-                    "-shortest", "-movflags", "+faststart", out], check=True)
+                    "-ar", "48000", "-ac", "2", "-shortest", song], check=True)
+    endcard = None
+    if "--endcard" in sys.argv:
+        endcard = sys.argv[sys.argv.index("--endcard") + 1]
+    if not endcard:
+        os.replace(song, out)
+        return
+    # The landing page card: fades up from black after the song, holds, fades out.
+    # It is letterboxed onto a near-black field to keep its 16:9 shape.
+    card = os.path.join(work, "card.mp4")
+    vf = (f"scale=-2:{H},pad={W}:{H}:(ow-iw)/2:0:color=0x141414,format=yuv420p,"
+          f"fade=t=in:st=0:d=0.8,fade=t=out:st={ENDCARD_SECONDS - 0.9}:d=0.9")
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-loop", "1", "-framerate", str(FPS), "-i", endcard,
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", str(ENDCARD_SECONDS),
+                    "-vf", vf, "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS),
+                    "-c:a", "aac", "-b:a", "256k", "-shortest", card], check=True)
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", song, "-i", card, "-filter_complex",
+                    "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]", "-map", "[v]", "-map", "[a]",
+                    "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", out], check=True)
 
 
 if __name__ == "__main__":
