@@ -529,11 +529,15 @@ def draw_side(d, cx, bob, phase, facing, jacket, walking=True):
     draw_leg(d, X(0), HIP_Y + y, -f * swing, near=True)
     # belt
     poly(d, [(X(-38), HIP_Y - 8 + y), (X(38), HIP_Y - 8 + y), (X(38), HIP_Y + 8 + y), (X(-38), HIP_Y + 8 + y)], BELT)
-    # torso
+    # torso: the T-shirt is always there, so a short jacket never leaves a gap at the waist
+    shirt = [(X(-40), SHOULDER_Y - 2 + y), (X(28), SHOULDER_Y + 4 + y), (X(50), SHOULDER_Y + 42 + y),
+             (X(52), SHOULDER_Y + 96 + y), (X(40), SHOULDER_Y + 180 + y), (X(38), HIP_Y - 6 + y),
+             (X(-36), HIP_Y - 6 + y), (X(-40), SHOULDER_Y + 150 + y), (X(-48), SHOULDER_Y + 50 + y)]
     if jacket:
+        poly(d, shirt, SHIRT)
         Lj = min(jacket["L"] * 0.62, 300)
-        tor = [(X(-38), SHOULDER_Y + y), (X(34), SHOULDER_Y + 4 + y), (X(50), SHOULDER_Y + 50 + y),
-               (X(50), SHOULDER_Y + Lj + y), (X(-46), SHOULDER_Y + Lj + y), (X(-50), SHOULDER_Y + 40 + y)]
+        tor = [(X(-38), SHOULDER_Y + y), (X(34), SHOULDER_Y + 4 + y), (X(54), SHOULDER_Y + 50 + y),
+               (X(54), SHOULDER_Y + Lj + y), (X(-46), SHOULDER_Y + Lj + y), (X(-50), SHOULDER_Y + 40 + y)]
         poly(d, tor, jacket["c"])
         lc = jacket.get("satin", jacket["c"])
         poly(d, [(X(26), SHOULDER_Y + 2 + y), (X(50), SHOULDER_Y + 104 + y), (X(32), SHOULDER_Y + 62 + y)],
@@ -567,8 +571,10 @@ def draw_back(d, cx, jacket, reach=0.0, target=(HANG_X, HANG_Y - 10), y=0.0):
     poly(d, [(cx - 54, HIP_Y - 8 + y), (cx + 54, HIP_Y - 8 + y), (cx + 54, HIP_Y + 8 + y), (cx - 54, HIP_Y + 8 + y)], BELT)
     # right arm (at his side)
     draw_arm(d, cx + 64, SHOULDER_Y + 16 + y, -0.08, jacket, bend=0.06)
-    # torso: broad shoulders tapering to the waist
+    # torso: broad shoulders tapering to the waist; T-shirt always underneath
     if jacket:
+        poly(d, [(cx - 66, SHOULDER_Y + 4 + y), (cx + 66, SHOULDER_Y + 4 + y), (cx + 60, SHOULDER_Y + 110 + y),
+                 (cx + 50, HIP_Y - 6 + y), (cx - 50, HIP_Y - 6 + y), (cx - 60, SHOULDER_Y + 110 + y)], SHIRT)
         Lj = min(jacket["L"] * 0.62, 300)
         tor = [(cx - 68, SHOULDER_Y + y), (cx + 68, SHOULDER_Y + y), (cx + 66, SHOULDER_Y + Lj + y),
                (cx - 66, SHOULDER_Y + Lj + y)]
@@ -649,13 +655,16 @@ def faceless_reflection(presence, jacket):
             return
         cx = MIR_CX + 26
         top = MIR_CY - 70
-        c = jacket["c"]
-        # shoulders in the coat
+        c = jacket["c"] if jacket else SHIRT
         poly(ld, [(cx - 95, top + 175), (cx - 40, top + 128), (cx + 40, top + 128), (cx + 95, top + 175),
                   (cx + 110, top + 260), (cx - 110, top + 260)], c)
-        poly(ld, [(cx - 28, top + 128), (cx + 28, top + 128), (cx, top + 200)], SHIRT)
-        poly(ld, [(cx - 40, top + 128), (cx - 4, top + 205), (cx - 30, top + 175), (cx - 50, top + 150)], darker(c, 0.85))
-        poly(ld, [(cx + 40, top + 128), (cx + 4, top + 205), (cx + 30, top + 175), (cx + 50, top + 150)], darker(c, 0.85))
+        if jacket:
+            poly(ld, [(cx - 28, top + 128), (cx + 28, top + 128), (cx, top + 200)], SHIRT)
+            poly(ld, [(cx - 40, top + 128), (cx - 4, top + 205), (cx - 30, top + 175), (cx - 50, top + 150)], darker(c, 0.85))
+            poly(ld, [(cx + 40, top + 128), (cx + 4, top + 205), (cx + 30, top + 175), (cx + 50, top + 150)], darker(c, 0.85))
+        else:
+            poly(ld, [(cx - 95, top + 175), (cx - 72, top + 152), (cx - 78, top + 240), (cx - 102, top + 236)], SHIRT_D)
+            line(ld, [(cx - 30, top + 128), (cx, top + 146), (cx + 30, top + 128)], width=2.2)
         poly(ld, [(cx - 18, top + 92), (cx + 18, top + 92), (cx + 21, top + 134), (cx - 21, top + 134)], SKIN)
         ellipse(ld, cx - 37, top + 52, 7, 12, SKIN_D, width=2)
         ellipse(ld, cx + 37, top + 52, 7, 12, SKIN_D, width=2)
@@ -675,8 +684,17 @@ ENDING = 26.0
 N = len(JACKETS)
 CYCLE = (DURATION - INTRO - ENDING) / N
 # phase lengths inside a cycle (idle absorbs the rest)
-T_ENTER, T_TURN, T_REACH, T_LIFT, T_WEAR, T_EXIT, T_EMPTY, T_FLICK = 3.4, 0.35, 1.1, 1.3, 0.6, 3.4, 1.4, 1.3
-T_IDLE = CYCLE - (T_ENTER + T_TURN + T_REACH + T_LIFT + T_WEAR + T_EXIT + T_EMPTY + T_FLICK)
+T_ENTER, T_TURN, T_REACH, T_LIFT, T_WEAR, T_EXIT, T_EMPTY, T_FADE = 3.4, 0.35, 1.1, 1.3, 1.2, 3.4, 0.9, 1.8
+T_IDLE = CYCLE - (T_ENTER + T_TURN + T_REACH + T_LIFT + T_WEAR + T_EXIT + T_EMPTY + T_FADE)
+
+# ending, timed to the song: the final verse starts about 142.8 s and the
+# vocal cuts off at about 154.5 s
+END_ENTER = 2.0              # seconds after the last cycle that he walks in
+MIRROR_AT = 142.8            # mirror fades in with "Part of God's grace"
+MIRROR_FADE = 2.0
+CHORD_AT = 154.45            # piano chord over the abrupt ending
+CHORD_SECONDS = 2.0
+FADE_OUT_START = CHORD_AT + CHORD_SECONDS
 
 ENTER_X, STAND_X, EXIT_X = 1530, 985, 1560
 STEP = 1.9  # walking cycles per second (radians handled below)
@@ -691,30 +709,22 @@ def walk(t0, t1, x0, x1, t):
 
 
 def light_level(t):
-    """Brightness of the scene during the lamp flickers between jackets."""
-    def flick(tc):
-        k = (t - tc) / T_FLICK
-        if k < 0 or k > 1:
-            return 1.0
-        # off, a quick stutter, then on
-        if k < 0.15:
-            return lerp(1.0, 0.35, k / 0.15)
-        if k < 0.55:
-            return 0.35
-        if k < 0.62:
-            return 0.8
-        if k < 0.72:
-            return 0.4
-        return lerp(0.4, 1.0, (k - 0.72) / 0.28)
+    """Overall brightness: fade up at the start, fade to black after the final piano chord."""
     lv = 1.0
-    for i in range(N):
-        tc = INTRO + i * CYCLE + CYCLE - T_FLICK
-        lv = min(lv, flick(tc))
+    if t < 1.5:
+        lv *= t / 1.5
+    if t > FADE_OUT_START:
+        lv *= max(0.0, 1.0 - (t - FADE_OUT_START) / (DURATION - FADE_OUT_START))
     return lv
 
 
 def state_at(t):
-    """Return a dict describing what is on screen at time t."""
+    """Describe what is on screen at time t.
+
+    A state may carry ("blend", other_state, alpha): the frame is then a
+    crossfade from this state to the other one, which gives the smooth
+    jacket changes and the mirror's appearance.
+    """
     if t < INTRO + N * CYCLE:
         i = int((t - INTRO) // CYCLE) if t >= INTRO else 0
         i = max(0, min(N - 1, i))
@@ -728,7 +738,6 @@ def state_at(t):
         e = dd + T_LIFT
         f = e + T_WEAR
         g = f + T_EXIT
-        swap = CYCLE - T_FLICK * 0.4      # moment the next item appears, while the light is off
         if tc < a:
             pass
         elif tc < b:
@@ -745,36 +754,47 @@ def state_at(t):
             st["hang_pos"] = (hx, hy)
             st["man"] = dict(view="back", x=STAND_X, reach=1.0, target=(hx, hy - 10), jacket=None, carry=True)
         elif tc < f:
-            st["hanging"] = False
-            st["man"] = dict(view="back", x=STAND_X, reach=lerp(1, 0, (tc - e) / T_WEAR), jacket=j)
+            # putting the jacket on: crossfade from holding it to wearing it
+            held = dict(st, hang_pos=(STAND_X - 40, HANG_Y + 20),
+                        man=dict(view="back", x=STAND_X, reach=1.0, target=(STAND_X - 40, HANG_Y + 10),
+                                 jacket=None, carry=True))
+            worn = dict(st, hanging=False, man=dict(view="back", x=STAND_X, reach=0.0, jacket=j))
+            held["blend"] = (worn, smooth((tc - e) / T_WEAR))
+            return held
         elif tc < g:
             st["hanging"] = False
             x, ph, bob = walk(f, g, STAND_X, EXIT_X, tc)
             st["man"] = dict(view="side", x=x, phase=ph, bob=bob, facing=1, jacket=j)
         else:
             st["hanging"] = False
-            if tc >= swap:
-                if i + 1 < N:
-                    st["jacket_idx"] = i + 1
-                    st["hanging"] = True
-                    st["hang_pos"] = (HANG_X, HANG_Y)
-                else:
-                    st["mirror"] = True
+            k = (tc - g - T_EMPTY) / T_FADE
+            if i + 1 < N and k > 0:
+                nxt = dict(st, jacket_idx=i + 1, hanging=True, hang_pos=(HANG_X, HANG_Y))
+                if k >= 1:
+                    return nxt
+                st["blend"] = (nxt, smooth(k))
         return st
-    # ending: the mirror
+    # ending: he comes in with no jacket, faces the empty hook, and the mirror
+    # fades in as the final verse begins
     te = t - INTRO - N * CYCLE
-    st = dict(jacket_idx=None, hanging=False, man=None, mirror=True, reflect=0)
-    a, b = 3.0, 3.0 + 4.2
+    st = dict(jacket_idx=None, hanging=False, man=None, mirror=False)
+    a, b = END_ENTER, END_ENTER + 4.4
     if te < a:
-        pass
-    elif te < b:
+        return st
+    if te < b:
         x, ph, bob = walk(a, b, ENTER_X, STAND_X + 20, te)
-        st["man"] = dict(view="side", x=x, phase=ph, bob=bob, facing=-1, jacket=JACKETS[-1])
-    elif te < b + 0.6:
-        st["man"] = dict(view="side", x=STAND_X + 20, phase=0, bob=0, facing=-1, jacket=JACKETS[-1], walking=False)
-    else:
-        st["man"] = dict(view="back", x=STAND_X + 20, reach=0, jacket=JACKETS[-1])
-        st["reflect"] = 1
+        st["man"] = dict(view="side", x=x, phase=ph, bob=bob, facing=-1, jacket=None)
+        return st
+    if te < b + 0.6:
+        st["man"] = dict(view="side", x=STAND_X + 20, phase=0, bob=0, facing=-1, jacket=None, walking=False)
+        return st
+    st["man"] = dict(view="back", x=STAND_X + 20, reach=0, jacket=None)
+    k = (t - MIRROR_AT) / MIRROR_FADE
+    if k > 0:
+        mir = dict(st, mirror=True, reflect=1)
+        if k >= 1:
+            return mir
+        st["blend"] = (mir, smooth(k))
     return st
 
 
@@ -790,17 +810,12 @@ def init(cover):
     _PLANT = Plant()
 
 
-def render(t):
-    img = _BG.copy()
+def compose(st, base):
+    img = base.copy()
     d = ImageDraw.Draw(img)
-    _PLANT.draw_all(d, t)
-    # keep the fern inside its own panel
-    img.paste(_BG.crop((S(PANEL_X) - 2, 0, S(W), S(H))), (S(PANEL_X) - 2, 0))
-    d = ImageDraw.Draw(img)
-    st = state_at(t)
     man = st["man"]
     if st.get("mirror"):
-        refl = faceless_reflection(st.get("reflect", 0), JACKETS[-1]) if st.get("reflect") else None
+        refl = faceless_reflection(1, None) if st.get("reflect") else None
         draw_mirror(d, img, refl)
         d = ImageDraw.Draw(img)
         draw_hook(d)
@@ -821,15 +836,85 @@ def render(t):
                 draw_jacket(d, JACKETS[st["jacket_idx"]], hx, hy, shadow=False)
             draw_back(d, man["x"], man["jacket"], reach=man.get("reach", 0),
                       target=man.get("target", (HANG_X, HANG_Y - 10)))
+    return img
+
+
+def render(t):
+    base = _BG.copy()
+    d = ImageDraw.Draw(base)
+    _PLANT.draw_all(d, t)
+    # keep the plant inside its own panel
+    base.paste(_BG.crop((S(PANEL_X) - 2, 0, S(W), S(H))), (S(PANEL_X) - 2, 0))
+    st = state_at(t)
+    img = compose(st, base)
+    if "blend" in st:
+        other, alpha = st["blend"]
+        img = Image.blend(img, compose(other, base), alpha)
     out = img.resize((W, H), Image.LANCZOS)
     lv = light_level(t)
-    if t < 1.5:
-        lv *= t / 1.5
-    if t > DURATION - 3.5:
-        lv *= max(0.0, (DURATION - t) / 3.5)
     if lv < 0.999:
         out = Image.eval(out, lambda v, lv=lv: int(v * lv))
     return out
+
+
+# ---------------------------------------------------------------- audio
+
+def piano_chord(sr, seconds):
+    """A deep B-flat minor piano chord (the song's key), synthesised."""
+    import numpy as np
+    n = int(sr * seconds)
+    t = np.arange(n) / sr
+    notes = [58.27, 87.31, 116.54, 138.59, 174.61]          # Bb1 F2 Bb2 Db3 F3
+    gains = [1.0, 0.7, 0.75, 0.55, 0.45]
+    out = np.zeros((n, 2))
+    rng = np.random.default_rng(3)
+    for k, (f0, g) in enumerate(zip(notes, gains)):
+        pan = 0.5 + (k - 2) * 0.12
+        for detune in (-0.0008, 0.0008):                    # two strings per note
+            sig = np.zeros(n)
+            for p in range(1, 16):
+                fp = p * f0 * (1 + detune) * math.sqrt(1 + 0.00035 * p * p)
+                if fp > sr / 2.2:
+                    break
+                amp = (1.0 / p ** 1.1) * (1.6 if p == 2 else 1.0)
+                sig += amp * np.sin(2 * math.pi * fp * t + rng.uniform(0, 6.28)) * np.exp(-t * (0.22 + 0.22 * p))
+            sig *= g
+            out[:, 0] += sig * (1 - pan)
+            out[:, 1] += sig * pan
+    # hammer attack and a gentle release at the very end
+    out *= np.minimum(1, t / 0.006)[:, None]
+    rel = 0.45
+    out *= np.clip((seconds - t) / rel, 0, 1)[:, None] ** 1.5
+    # a little room: short decaying noise reverb
+    ir_n = int(sr * 0.9)
+    ir = rng.standard_normal(ir_n) * np.exp(-np.arange(ir_n) / sr * 6.0)
+    ir[0] = 0
+    wet = np.stack([np.convolve(out[:, c], ir * 0.012)[:n] for c in range(2)], axis=1)
+    out = out + wet
+    return out / np.max(np.abs(out))
+
+
+def build_audio(wav_in, wav_out):
+    """The song with the piano chord laid over its abrupt ending."""
+    import numpy as np
+    sr = 48000
+    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", wav_in, "-f", "f32le", "-ac", "2",
+                          "-ar", str(sr), "-"], capture_output=True, check=True).stdout
+    song = np.frombuffer(raw, dtype=np.float32).reshape(-1, 2).astype(np.float64)
+    total = int(DURATION * sr)
+    mix = np.zeros((max(total, len(song)), 2))
+    mix[:len(song)] += song
+    chord = piano_chord(sr, CHORD_SECONDS) * 0.5           # peak about -6 dBFS
+    s0 = int(CHORD_AT * sr)
+    seg = mix[s0:s0 + len(chord)]
+    seg += chord[:len(seg)]
+    mix = mix[:total]
+    peak = np.max(np.abs(mix))
+    if peak > 0.98:
+        mix *= 0.98 / peak
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "f64le", "-ar", str(sr), "-ac", "2", "-i", "-",
+                    "-c:a", "pcm_s16le", wav_out], input=mix.astype(np.float64).tobytes(), check=True)
+    return wav_out
 
 
 def render_chunk(args):
@@ -868,6 +953,7 @@ def main():
     with open(lst, "w") as fh:
         for pth in parts:
             fh.write(f"file '{pth}'\n")
+    audio = build_audio(audio, os.path.join(work, "audio_with_chord.wav"))
     song = os.path.join(work, "song.mp4")
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst,
                     "-i", audio, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
