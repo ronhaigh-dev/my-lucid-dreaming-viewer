@@ -19,7 +19,14 @@ from PIL import Image, ImageDraw, ImageChops
 W, H = 1408, 768
 SS = 2                      # supersampling factor
 FPS = 24
-DURATION = 157.57
+SONG_LEN = 157.57             # the WAV, including its trailing silence
+VOCAL_END = 154.55            # where the last word, "face", is cut off
+LINGER = 2.4                  # how long "face" rings out after the cut
+PAUSE = 0.8                   # silence before the piano chord
+CHORD_AT = VOCAL_END + LINGER + PAUSE
+CHORD_SECONDS = 2.0
+FADE_OUT_START = CHORD_AT + CHORD_SECONDS
+DURATION = FADE_OUT_START + 1.2   # picture fades to black after the chord
 ENDCARD_SECONDS = 5.5          # landing page after the song: total about 2:43
 
 INK = (22, 24, 12)
@@ -682,7 +689,7 @@ def faceless_reflection(presence, jacket):
 INTRO = 2.5
 ENDING = 26.0
 N = len(JACKETS)
-CYCLE = (DURATION - INTRO - ENDING) / N
+CYCLE = (SONG_LEN - INTRO - ENDING) / N
 # phase lengths inside a cycle (idle absorbs the rest)
 T_ENTER, T_TURN, T_REACH, T_LIFT, T_WEAR, T_EXIT, T_EMPTY, T_FADE = 3.4, 0.35, 1.1, 1.3, 1.2, 3.4, 0.9, 1.8
 T_IDLE = CYCLE - (T_ENTER + T_TURN + T_REACH + T_LIFT + T_WEAR + T_EXIT + T_EMPTY + T_FADE)
@@ -692,9 +699,6 @@ T_IDLE = CYCLE - (T_ENTER + T_TURN + T_REACH + T_LIFT + T_WEAR + T_EXIT + T_EMPT
 END_ENTER = 2.0              # seconds after the last cycle that he walks in
 MIRROR_AT = 142.8            # mirror fades in with "Part of God's grace"
 MIRROR_FADE = 2.0
-CHORD_AT = 154.45            # piano chord over the abrupt ending
-CHORD_SECONDS = 2.0
-FADE_OUT_START = CHORD_AT + CHORD_SECONDS
 
 ENTER_X, STAND_X, EXIT_X = 1530, 985, 1560
 STEP = 1.9  # walking cycles per second (radians handled below)
@@ -902,8 +906,38 @@ def build_audio(wav_in, wav_out):
                           "-ar", str(sr), "-"], capture_output=True, check=True).stdout
     song = np.frombuffer(raw, dtype=np.float32).reshape(-1, 2).astype(np.float64)
     total = int(DURATION * sr)
-    mix = np.zeros((max(total, len(song)), 2))
-    mix[:len(song)] += song
+    mix = np.zeros((max(total, len(song)) + sr, 2))
+    cut = int(VOCAL_END * sr)
+    # the song up to the cut, with a short fade so nothing clicks
+    body = song[:cut].copy()
+    fade = int(0.04 * sr)
+    body[-fade:] *= np.linspace(1, 0, fade)[:, None]
+    mix[:cut] += body
+    # let the last word ring out: a smooth reverb tail built from the final
+    # moments of the song, so "face" lingers and dies away naturally
+    rng = np.random.default_rng(11)
+    ir_n = int(sr * (LINGER + 0.6))
+    tt = np.arange(ir_n) / sr
+    decay = np.exp(-tt * 6.9 / 4.0)                       # slow, about 4 s to fade by 60 dB
+    irs = []
+    for c in range(2):
+        noise = rng.standard_normal(ir_n)
+        noise = np.convolve(noise, np.ones(8) / 8, mode="same")   # soften the highs
+        irs.append(noise * decay)
+    src_n = int(0.6 * sr)
+    src = song[cut - src_n:cut] * np.hanning(2 * src_n)[:src_n, None]
+    nfft = 1 << int(np.ceil(np.log2(src_n + ir_n)))
+    tail = np.stack([np.fft.irfft(np.fft.rfft(src[:, c], nfft) * np.fft.rfft(irs[c], nfft), nfft)[:src_n + ir_n]
+                     for c in range(2)], axis=1)[src_n:]
+    # match the tail's starting level to the song at the cut, then fade it out
+    ref = np.sqrt(np.mean(song[cut - int(0.25 * sr):cut] ** 2))
+    head = np.sqrt(np.mean(tail[:int(0.3 * sr)] ** 2)) + 1e-12
+    tail *= 0.9 * ref / head
+    tail = tail[:int(LINGER * sr)]
+    tail *= np.cos(np.linspace(0, np.pi / 2, len(tail)))[:, None] ** 1.5
+    ramp = int(0.05 * sr)
+    tail[:ramp] *= np.linspace(0, 1, ramp)[:, None]
+    mix[cut - ramp:cut - ramp + len(tail)] += tail
     chord = piano_chord(sr, CHORD_SECONDS) * 0.5           # peak about -6 dBFS
     s0 = int(CHORD_AT * sr)
     seg = mix[s0:s0 + len(chord)]
